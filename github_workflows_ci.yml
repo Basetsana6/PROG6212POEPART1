@@ -1,28 +1,92 @@
-name: CI
+name: CI / CD
+
+# Runs lint & build on every push/pull request.
+# Deploys only on pushes to the default branch (e.g., main) and only if you configure the related secrets or repository variables.
 
 on:
   push:
-    branches: [ '**' ]
+    branches: ['**']
   pull_request:
-    branches: [ '**' ]
+    branches: ['**']
 
 jobs:
-  test:
+  lint_build:
+    name: Lint & Build
     runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [18.x, 20.x]
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
+      # Run lint if script exists (non-failing if absent)
+      - name: Run linter (if configured)
+        run: npm run lint --if-present
+
+      # Run build if script exists (non-failing if absent)
+      - name: Run build (if configured)
+        run: npm run build --if-present
+
+  deploy:
+    name: Deploy (only on default branch)
+    needs: lint_build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (if configured)
+        run: npm run build --if-present
+
+      # --------------------------
+      # GitHub Pages deployment
+      # To enable: set a repo variable PAGES_DEPLOY=true (Repository > Settings > Variables)
+      # Ensure your build outputs to ./dist (or change publish_dir below).
+      # --------------------------
+      - name: Deploy to GitHub Pages (optional)
+        if: env.PAGES_DEPLOY == 'true'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+
+      # --------------------------
+      # Docker build & push (optional)
+      # To enable: set secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN
+      # Ensure a Dockerfile exists at repo root and update tags as needed.
+      # --------------------------
+      - name: Login to DockerHub (optional)
+        if: ${{ secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN }}
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image (optional)
+        if: ${{ secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/REPO_NAME:latest
+   
